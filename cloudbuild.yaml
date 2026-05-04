@@ -31,6 +31,10 @@ steps:
       - '--cpu-boost'
       - '--session-affinity'
 
+substitutions:
+  _SERVICE_NAME: aiinterview
+  _DEPLOY_REGION: europe-west1
+
 images:
   - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}'
 
