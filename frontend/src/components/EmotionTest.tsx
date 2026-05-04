@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, StopCircle, RefreshCw, BarChart2, Video, Mic, MicOff, Activity } from 'lucide-react';
+import hark from 'hark';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -36,7 +37,11 @@ export default function EmotionTest() {
     const sessionIdRef = useRef<string>('');
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+    const transcriptEndRef = useRef<HTMLDivElement>(null);
+    const speechEventsRef = useRef<any>(null);
     const [mounted, setMounted] = useState(false);
+    const [finalTranscript, setFinalTranscript] = useState('');
+    const [interimTranscript, setInterimTranscript] = useState('');
 
     // Initialize individual session ID
     useEffect(() => {
@@ -104,9 +109,28 @@ export default function EmotionTest() {
                 sendAudioToBackend(blob);
             };
 
+            // Set up Voice Activity Detection (hark)
+            const speechEvents = hark(audioStream, { interval: 50, play: false });
+            
+            speechEvents.on('speaking', () => {
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+                    mediaRecorderRef.current.start();
+                }
+            });
+
+            speechEvents.on('stopped_speaking', () => {
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                    mediaRecorderRef.current.stop();
+                }
+            });
+            
+            speechEventsRef.current = speechEvents;
             mediaRecorderRef.current = recorder;
-            recorder.start();
             setIsStreaming(true);
+            
+            // Start transcript
+            setFinalTranscript('');
+            setInterimTranscript('');
         } catch (error) {
             console.error("Failed to access media:", error);
             alert("Could not access camera/mic. Please ensure permissions are granted.");
@@ -129,6 +153,17 @@ export default function EmotionTest() {
                 });
                 const result = await response.json();
                 setAudioData(result);
+                
+                if (result.success) {
+                    if (result.is_final) {
+                        if (result.transcription) {
+                            setFinalTranscript(prev => prev + (prev ? ' ' : '') + result.transcription);
+                        }
+                        setInterimTranscript('');
+                    } else {
+                        setInterimTranscript(result.transcription || '');
+                    }
+                }
             } catch (error) {
                 console.error("Audio analysis failed:", error);
             }
@@ -145,6 +180,9 @@ export default function EmotionTest() {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
         }
+        if (speechEventsRef.current) {
+            speechEventsRef.current.stop();
+        }
 
         // Notify backend and ROTATE session ID for next time
         endSessionBackend();
@@ -157,19 +195,15 @@ export default function EmotionTest() {
         setAudioData(null);
     };
 
-    // Audio capture loop (send every 3 seconds)
+    // Audio capture loop is now handled by hark VAD
+
+
+    // Auto-scroll transcript
     useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (isStreaming && mediaRecorderRef.current) {
-            interval = setInterval(() => {
-                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-                    mediaRecorderRef.current.stop(); // This triggers onstop and sends the blob
-                    mediaRecorderRef.current.start(); // Start new chunk
-                }
-            }, 3000);
+        if (transcriptEndRef.current) {
+            transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
-        return () => clearInterval(interval);
-    }, [isStreaming]);
+    }, [finalTranscript, interimTranscript]);
 
     // Capture and analyze loop (Video)
     useEffect(() => {
@@ -441,9 +475,33 @@ export default function EmotionTest() {
                         )}
                     </div>
 
-                    {/* Placeholder for future features */}
-                    <div className="flex-1 border-2 border-dashed border-white/5 rounded-3xl flex items-center justify-center opacity-10">
-                        <p className="text-[8px] font-black uppercase tracking-widest italic">+ Add Module</p>
+                    {/* Row 3: Live Transcript */}
+                    <div className="flex-1 bg-gray-900/50 backdrop-blur-xl border border-white/5 rounded-3xl p-5 shadow-xl flex flex-col min-h-[150px]">
+                        <div className="flex items-center gap-2 mb-3 opacity-60">
+                            <h2 className="text-[10px] font-black uppercase tracking-[0.25em]">Live Transcript</h2>
+                        </div>
+
+                        {!isStreaming ? (
+                            <div className="flex-1 flex items-center justify-center text-gray-700">
+                                <p className="text-[9px] uppercase tracking-widest font-black animate-pulse">Waiting...</p>
+                            </div>
+                        ) : (
+                            <div className="flex-1 w-full bg-black/40 rounded-2xl p-4 overflow-y-auto border border-white/5">
+                                {(finalTranscript || interimTranscript) ? (
+                                    <p className="text-xs text-gray-300 leading-relaxed font-medium">
+                                        {finalTranscript}
+                                        {finalTranscript && interimTranscript && ' '}
+                                        {interimTranscript && (
+                                            <span className="text-white font-bold opacity-80">{interimTranscript}</span>
+                                        )}
+                                        <span className="inline-block w-1.5 h-3 ml-1 bg-purple-500 animate-pulse align-middle" />
+                                    </p>
+                                ) : (
+                                    <p className="text-xs text-gray-600 italic">Listening...</p>
+                                )}
+                                <div ref={transcriptEndRef} />
+                            </div>
+                        )}
                     </div>
 
                 </div>

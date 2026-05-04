@@ -12,6 +12,12 @@ import socketio
 from face_analyzer import FaceAnalyzer
 from audio_analyzer import AudioAnalyzer
 import gc
+import os
+import httpx
+import asyncio
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 1. Initialize Socket.io Server with verbose logging for debugging
 sio = socketio.AsyncServer(
@@ -73,11 +79,35 @@ async def end_session(data: SessionClearRequest):
     if analyzer:
         with analyzer.lock:
             if data.session_id in analyzer.sessions:
+                session_data = analyzer.sessions[data.session_id]
+                full_transcript = session_data.get('full_transcript', '').strip()
+                
+                # Trigger Webhook
+                webhook_url = os.getenv("WEBHOOK_URL")
+                if webhook_url and webhook_url != "https://webhook.site/replace-with-your-id":
+                    print(f"🚀 Sending transcript to Webhook: {webhook_url}")
+                    asyncio.create_task(send_webhook(webhook_url, data.session_id, full_transcript))
+                else:
+                    print(f"⚠️ WEBHOOK_URL not configured. Transcript would be:\n{full_transcript}")
+
                 del analyzer.sessions[data.session_id]
                 gc.collect() # Force garbage collection to free RAM
                 print(f"Session {data.session_id} deleted from RAM and GC triggered.")
                 return {"success": True, "message": "Session cleared"}
     return {"success": False, "message": "Session not found"}
+
+async def send_webhook(url: str, session_id: str, transcript: str):
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "session_id": session_id,
+                "transcript": transcript,
+                "timestamp": time.time()
+            }
+            response = await client.post(url, json=payload)
+            print(f"✅ Webhook Success ({response.status_code}): {response.text[:100]}")
+    except Exception as e:
+        print(f"❌ Webhook Failed: {e}")
 
 @app.post("/analyze")
 async def analyze_frame(data: FrameData):
@@ -161,7 +191,8 @@ async def analyze_audio(data: AudioData):
                         },
                         "last_head_pos": (0.5, 0.5),
                         "stability_history": [1.0] * 10,
-                        "last_seen": time.time()
+                        "last_seen": time.time(),
+                        "full_transcript": ""
                     }
                 
                 session = analyzer.sessions[data.session_id]
@@ -173,6 +204,12 @@ async def analyze_audio(data: AudioData):
                         "silence_ms": 0, 
                         "current_silence_ms": 0
                     }
+                
+                if 'audio_buffer' not in session:
+                    session['audio_buffer'] = np.array([], dtype=np.float32)
+                
+                if 'full_transcript' not in session:
+                    session['full_transcript'] = ""
                 
                 # Robustness for face state (if session was created by audio)
                 if 'stability_history' not in session:
@@ -209,12 +246,26 @@ async def analyze_audio(data: AudioData):
                 total_time = s_stats.get('speech_ms', 0) + s_stats.get('silence_ms', 0)
                 fluency = (s_stats.get('speech_ms', 0) / total_time * 100) if total_time > 0 else 100
                 
+                # Buffer Management & Transcription
+                # Because the frontend uses hark VAD, every payload is a perfectly bounded turn!
+                transcription = await audio_analyzer.transcribe_webm(data.audio)
+                is_final = True
+                
+                if transcription:
+                    session['full_transcript'] += transcription + " "
+                
+                # Cleanup old buffer memory
+                if 'audio_buffer' in session:
+                    session['audio_buffer'] = np.array([], dtype=np.float32)
+                
                 results_payload = {
                     "success": True,
                     "fluency": round(fluency, 2),
                     "is_speaking": stats.get('speech_ms', 0) > 0,
                     "vocal_status": status,
-                    "silence_streak": round(streak / 1000, 1)
+                    "silence_streak": round(streak / 1000, 1),
+                    "transcription": transcription,
+                    "is_final": is_final
                 }
 
                 # Relay to room if in an interview

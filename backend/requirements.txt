@@ -14,3 +14,6 @@ torch
 python-multipart==0.0.22
 python-socketio
 anyio
+httpx
+python-dotenv
+scipy
