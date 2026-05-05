@@ -30,6 +30,11 @@ class AudioAnalyzer:
         
         # Setup Groq API details
         self.groq_api_key = os.getenv("GROQ_API_KEY")
+        if not self.groq_api_key:
+            print("❌ [CRITICAL] GROQ_API_KEY is NOT set in environment variables!")
+        else:
+            print(f"✅ GROQ_API_KEY detected (starts with: {self.groq_api_key[:6]}...)")
+            
         self.groq_api_url = "https://api.groq.com/openai/v1/audio/transcriptions"
         self._COUNTER_Q_PATTERN = re.compile(
             r"\s*(,\s*)?(and\s+you|what\s+about\s+you|how\s+about\s+you|you\??)\s*\??\s*$",
@@ -157,6 +162,7 @@ class AudioAnalyzer:
             
             if res.status_code == 200:
                 text = res.json().get("text", "").strip()
+                print(f"🎤 [STT] Received: '{text}'")
                 _HALLUCINATIONS = {
                     "Thank you.", "Thank you", "Thanks for watching.",
                     "Thank you very much.", "Thank you for watching.",
@@ -165,8 +171,11 @@ class AudioAnalyzer:
                     "So.", "so", "Yeah.", "yeah"
                 }
                 if text in _HALLUCINATIONS or len(text) < 3:
+                    print(f"🎤 [STT] Dropped as hallucination/too short.")
                     return ""
                 return self._clean_user_input(text)
+            
+            print(f"❌ [STT] Groq Error {res.status_code}: {res.text}")
             return ""
         except Exception as e:
             print(f"Direct WebM Transcribe Error: {e}")
