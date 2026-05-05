@@ -30,6 +30,8 @@ steps:
       - '3600'
       - '--cpu-boost'
       - '--session-affinity'
+      - '--set-secrets'
+      - 'GROQ_API_KEY=GROQ_API_KEY:latest'
 
 substitutions:
   _SERVICE_NAME: aiinterview
